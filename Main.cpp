@@ -1,6 +1,8 @@
 #include "Common.h"
 #include "Player.h"
 #include "Renderer.h"
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 // ---------- Оконная процедура ----------
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -40,20 +42,34 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         NULL, NULL, hInstance, NULL);
 
     if (hwnd == NULL) return 0;
+
     ShowWindow(hwnd, nCmdShow);
+    UpdateWindow(hwnd); // Чтобы сразу сработал WM_PAINT и окно не было белым
 
     InitGame();
 
+    DWORD lastTime = timeGetTime();
     MSG msg = { };
+
     while (msg.message != WM_QUIT) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
         else {
-            UpdateGame();
-            InvalidateRect(hwnd, NULL, FALSE);
-            Sleep(16); // ~60 FPS
+            DWORD currentTime = timeGetTime();
+            float deltaTime = (currentTime - lastTime) / 1000.0f;
+            lastTime = currentTime;
+
+            // Страховка от зависаний и сворачивания окна
+            if (deltaTime > 0.1f) deltaTime = 0.1f;
+
+            UpdateGame(deltaTime);
+
+            // Рисуем напрямую, без InvalidateRect и WM_PAINT в каждом кадре
+            HDC hdc = GetDC(hwnd);
+            DrawGame(hdc);
+            ReleaseDC(hwnd, hdc);
         }
     }
     return 0;
