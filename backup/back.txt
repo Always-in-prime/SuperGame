@@ -1,0 +1,551 @@
+#include <windows.h>
+#include <cmath>
+#include <cstdio>
+#include <cwchar>
+
+const int WINDOW_WIDTH = 800;
+const int WINDOW_HEIGHT = 600;
+const double PI = 3.1415926535;
+
+const int MAP_WIDTH = 12;
+const int MAP_HEIGHT = 12;
+const char map[MAP_HEIGHT][MAP_WIDTH + 1] = {
+    "############",
+    "#........###",
+    "#.##.......#",
+    "#....#..##.#",
+    "###..#...#.#",
+    "#....#####.#",
+    "#.#........#",
+    "#.#...###..#",
+    "#.#...#....#",
+    "#.#####..###",
+    "#..........#",
+    "############"
+};
+
+struct Player {
+    double x, y;
+    double angle;
+    int score;
+    int hp;
+    int shootCooldown;   // кадров до следующего выстрела
+    int muzzleFlash;     // кадров вспышки
+    int deathTimer;      // >0 — мёртв, отсчёт до респавна
+    double startX, startY, startAngle;
+};
+
+Player p1 = { 1.5, 1.5, 0.0, 0, 100, 0, 0, 0, 1.5, 1.5, 0.0 };
+Player p2 = { 1.5, 2.5, 0.0, 0, 100, 0, 0, 0, 1.5, 2.5, 0.0 };
+
+double move_speed = 0.06;
+double rot_speed = 0.04;
+double FOV = PI / 3.0;
+
+const int SHOT_DAMAGE = 25;
+const int SHOT_COOLDOWN = 30;   // ~0.5 сек при 60 FPS
+const int MUZZLE_TIME = 6;
+const int RESPAWN_TIME = 120;  // ~2 сек
+const double HIT_RADIUS = 0.35;
+
+// ---------- Попытка выстрела ----------
+void TryShoot(Player& shooter, Player& target) {
+    if (shooter.deathTimer > 0) return;
+    if (shooter.shootCooldown > 0) return;
+
+    shooter.shootCooldown = SHOT_COOLDOWN;
+    shooter.muzzleFlash = MUZZLE_TIME;
+
+    double dirx = sin(shooter.angle);
+    double diry = cos(shooter.angle);
+
+    double to_tx = target.x - shooter.x;
+    double to_ty = target.y - shooter.y;
+
+    // Проекция цели на направление выстрела
+    double dist_along = to_tx * dirx + to_ty * diry;
+    if (dist_along <= 0.2) return;
+
+    // Перпендикулярное расстояние от цели до луча
+    double px = shooter.x + dirx * dist_along;
+    double py = shooter.y + diry * dist_along;
+    double miss = sqrt((target.x - px) * (target.x - px) + (target.y - py) * (target.y - py));
+    if (miss > HIT_RADIUS) return;
+
+    // Проверка стены между стрелком и целью
+    for (double d = 0.15; d < dist_along; d += 0.1) {
+        int cx = (int)(shooter.x + dirx * d);
+        int cy = (int)(shooter.y + diry * d);
+        if (cx < 0 || cx >= MAP_WIDTH || cy < 0 || cy >= MAP_HEIGHT) return;
+        if (map[cy][cx] == '#') return;
+    }
+
+    // Попадание!
+    if (target.deathTimer > 0) return; // уже мёртв — не добиваем
+    target.hp -= SHOT_DAMAGE;
+    if (target.hp <= 0) {
+        target.hp = 0;
+        target.deathTimer = RESPAWN_TIME;
+        shooter.score++;
+    }
+}
+
+// ---------- Отрисовка спрайта игрока ----------
+void RenderOtherPlayer(HDC memDC, Player& viewer, Player& target,
+    int screen_left, int view_width, int half_height,
+    double* zbuffer)
+{
+    if (target.deathTimer > 0) return; // мёртвых не рисуем
+
+    double dx = target.x - viewer.x;
+    double dy = target.y - viewer.y;
+    double dist = sqrt(dx * dx + dy * dy);
+    if (dist < 0.3) return;
+
+    double angle_to = atan2(dx, dy);
+    double angle_diff = angle_to - viewer.angle;
+    while (angle_diff > PI) angle_diff -= 2 * PI;
+    while (angle_diff < -PI) angle_diff += 2 * PI;
+
+    if (fabs(angle_diff) > FOV / 2.0 + 0.5) return;
+
+    double perp_dist = dist * cos(angle_diff);
+    if (perp_dist < 0.1) perp_dist = 0.1;
+
+    double screen_center = (0.5 + 0.5 * tan(angle_diff) / tan(FOV / 2.0)) * view_width;
+
+    double sprite_h = (double)WINDOW_HEIGHT / perp_dist;
+    if (sprite_h > WINDOW_HEIGHT * 4) sprite_h = WINDOW_HEIGHT * 4;
+    double sprite_w = sprite_h * 0.55;
+
+    int top = half_height - (int)(sprite_h / 2);
+    int bottom = half_height + (int)(sprite_h / 2);
+
+    int head_top = top;
+    int head_bot = top + (int)(sprite_h * 0.25);
+    int torso_bot = top + (int)(sprite_h * 0.60);
+    int legs_bot = bottom;
+
+    double dir_to_viewer = atan2(viewer.x - target.x, viewer.y - target.y);
+    double facing = target.angle - dir_to_viewer;
+    while (facing > PI) facing -= 2 * PI;
+    while (facing < -PI) facing += 2 * PI;
+
+    double cosF = cos(facing);
+    double sinF = sin(facing);
+
+    double headW = sprite_w * (0.55 + 0.35 * fabs(cosF));
+    double torsoW = sprite_w * (0.70 + 0.30 * fabs(cosF));
+
+    COLORREF faceColor = RGB(255, 215, 175);
+    COLORREF hairColor = RGB(55, 35, 20);
+    COLORREF frontShirt = RGB(70, 110, 220);
+    COLORREF backShirt = RGB(30, 50, 120);
+    COLORREF pantsColor = RGB(45, 45, 60);
+    COLORREF eyeColor = RGB(15, 15, 15);
+
+    double mix = (1.0 - cosF) * 0.5;
+
+    COLORREF headColor = RGB(
+        (int)(GetRValue(faceColor) * (1 - mix) + GetRValue(hairColor) * mix),
+        (int)(GetGValue(faceColor) * (1 - mix) + GetGValue(hairColor) * mix),
+        (int)(GetBValue(faceColor) * (1 - mix) + GetBValue(hairColor) * mix));
+
+    COLORREF torsoColor = RGB(
+        (int)(GetRValue(frontShirt) * (1 - mix) + GetRValue(backShirt) * mix),
+        (int)(GetGValue(frontShirt) * (1 - mix) + GetGValue(backShirt) * mix),
+        (int)(GetBValue(frontShirt) * (1 - mix) + GetBValue(backShirt) * mix));
+
+    HPEN headPen = CreatePen(PS_SOLID, 1, headColor);
+    HPEN torsoPen = CreatePen(PS_SOLID, 1, torsoColor);
+    HPEN legsPen = CreatePen(PS_SOLID, 1, pantsColor);
+    HPEN oldPen = (HPEN)SelectObject(memDC, headPen);
+
+    int x_start = (int)(screen_center - sprite_w);
+    int x_end = (int)(screen_center + sprite_w);
+
+    for (int x = x_start; x <= x_end; x++) {
+        if (x < 0 || x >= view_width) continue;
+        if (perp_dist > zbuffer[x]) continue;
+
+        double u = x - screen_center;
+
+        if (fabs(u) < headW / 2.0) {
+            SelectObject(memDC, headPen);
+            MoveToEx(memDC, screen_left + x, head_top, NULL);
+            LineTo(memDC, screen_left + x, head_bot);
+        }
+        if (fabs(u) < torsoW / 2.0) {
+            SelectObject(memDC, torsoPen);
+            MoveToEx(memDC, screen_left + x, head_bot, NULL);
+            LineTo(memDC, screen_left + x, torso_bot);
+        }
+        if (fabs(u) < torsoW / 2.0 && fabs(u) > torsoW * 0.06) {
+            SelectObject(memDC, legsPen);
+            MoveToEx(memDC, screen_left + x, torso_bot, NULL);
+            LineTo(memDC, screen_left + x, legs_bot);
+        }
+    }
+
+    if (cosF > -0.3) {
+        HPEN eyePen = CreatePen(PS_SOLID, 1, eyeColor);
+        SelectObject(memDC, eyePen);
+
+        double headCenterY = (head_top + head_bot) / 2.0;
+        double eyeSizeH = (head_bot - head_top) * 0.18;
+        double eyeSizeW = headW * 0.14;
+        double eyeY1 = headCenterY - eyeSizeH / 2;
+        double eyeY2 = headCenterY + eyeSizeH / 2;
+
+        double base = headW * 0.20;
+        double shift = sinF * headW * 0.30;
+
+        double eyesX[2] = {
+            screen_center - base + shift,
+            screen_center + base + shift
+        };
+
+        for (int e = 0; e < 2; e++) {
+            if (fabs(eyesX[e] - screen_center) > headW / 2.0 - eyeSizeW) continue;
+
+            int ex1 = (int)(eyesX[e] - eyeSizeW / 2);
+            int ex2 = (int)(eyesX[e] + eyeSizeW / 2);
+            for (int px = ex1; px <= ex2; px++) {
+                if (px < 0 || px >= view_width) continue;
+                if (perp_dist > zbuffer[px]) continue;
+                MoveToEx(memDC, screen_left + px, (int)eyeY1, NULL);
+                LineTo(memDC, screen_left + px, (int)eyeY2);
+            }
+        }
+        DeleteObject(eyePen);
+    }
+
+    SelectObject(memDC, oldPen);
+    DeleteObject(headPen);
+    DeleteObject(torsoPen);
+    DeleteObject(legsPen);
+}
+
+// ---------- Отрисовка оружия (дробовик в стиле Doom) ----------
+void RenderWeapon(HDC memDC, Player& p, int screen_left, int screen_right) {
+    if (p.deathTimer > 0) return;
+
+    int cx = (screen_left + screen_right) / 2;
+    int bottom = WINDOW_HEIGHT;
+
+    // Приклад / тело оружия
+    HBRUSH stockBrush = CreateSolidBrush(RGB(85, 55, 30));
+    RECT stockR = { cx - 45, bottom - 120, cx + 45, bottom };
+    FillRect(memDC, &stockR, stockBrush);
+    DeleteObject(stockBrush);
+
+    // Ствол
+    HBRUSH barrelBrush = CreateSolidBrush(RGB(55, 55, 65));
+    RECT barrelR = { cx - 14, bottom - 230, cx + 14, bottom - 110 };
+    FillRect(memDC, &barrelR, barrelBrush);
+
+    // Блик на стволе
+    HBRUSH shineBrush = CreateSolidBrush(RGB(95, 95, 110));
+    RECT shineR = { cx - 10, bottom - 220, cx - 4, bottom - 120 };
+    FillRect(memDC, &shineR, shineBrush);
+
+    DeleteObject(barrelBrush);
+    DeleteObject(shineBrush);
+
+    // Руки
+    HBRUSH handBrush = CreateSolidBrush(RGB(230, 180, 140));
+    RECT leftHandR = { cx - 90, bottom - 95, cx - 30, bottom };
+    RECT rightHandR = { cx + 30, bottom - 95, cx + 90, bottom };
+    FillRect(memDC, &leftHandR, handBrush);
+    FillRect(memDC, &rightHandR, handBrush);
+    DeleteObject(handBrush);
+
+    // Вспышка выстрела
+    if (p.muzzleFlash > 0) {
+        int flashR = 55 + (rand() % 15);
+        int fcx = cx;
+        int fcy = bottom - 230;
+
+        HBRUSH flashBrush = CreateSolidBrush(RGB(255, 230, 90));
+        HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, flashBrush);
+        HPEN flashPen = CreatePen(PS_SOLID, 1, RGB(255, 245, 180));
+        HPEN oldPen = (HPEN)SelectObject(memDC, flashPen);
+
+        Ellipse(memDC, fcx - flashR, fcy - flashR, fcx + flashR, fcy + flashR);
+
+        SelectObject(memDC, oldBrush);
+        SelectObject(memDC, oldPen);
+        DeleteObject(flashBrush);
+        DeleteObject(flashPen);
+    }
+}
+
+// ---------- HUD: HP и счёт ----------
+void RenderHUD(HDC memDC, Player& p, int screen_left, int screen_right) {
+    int w = screen_right - screen_left;
+
+    // Полоска HP
+    int barW = 180;
+    int barH = 18;
+    int barX = screen_left + 10;
+    int barY = WINDOW_HEIGHT - 30;
+
+    HBRUSH bgBrush = CreateSolidBrush(RGB(30, 30, 30));
+    RECT bgR = { barX, barY, barX + barW, barY + barH };
+    FillRect(memDC, &bgR, bgBrush);
+    DeleteObject(bgBrush);
+
+    int hp = p.hp;
+    if (hp < 0) hp = 0;
+    int fillW = barW * hp / 100;
+    COLORREF hpColor = RGB(200, 40, 40);
+    if (hp > 60) hpColor = RGB(60, 200, 60);
+    else if (hp > 30) hpColor = RGB(220, 180, 40);
+
+    HBRUSH hpBrush = CreateSolidBrush(hpColor);
+    RECT hpR = { barX + 1, barY + 1, barX + 1 + fillW - 1, barY + barH - 1 };
+    if (hpR.right < hpR.left) hpR.right = hpR.left;
+    FillRect(memDC, &hpR, hpBrush);
+    DeleteObject(hpBrush);
+
+    // Рамка
+    HPEN framePen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
+    HPEN oldPen = (HPEN)SelectObject(memDC, framePen);
+    HBRUSH nullBrush = (HBRUSH)GetStockObject(NULL_BRUSH);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, nullBrush);
+    Rectangle(memDC, barX, barY, barX + barW, barY + barH);
+    SelectObject(memDC, oldPen);
+    SelectObject(memDC, oldBrush);
+    DeleteObject(framePen);
+
+    // Текст
+    SetBkMode(memDC, TRANSPARENT);
+    SetTextColor(memDC, RGB(255, 255, 255));
+    wchar_t buf[64];
+    swprintf_s(buf, L"HP: %d", p.hp);
+    TextOut(memDC, barX + barW + 10, barY, buf, (int)wcslen(buf));
+
+    swprintf_s(buf, L"Счёт: %d", p.score);
+    TextOut(memDC, barX + barW + 10, barY - 20, buf, (int)wcslen(buf));
+}
+
+// ---------- Отрисовка вида одного игрока ----------
+void RenderPlayerView(HDC memDC, Player& player, Player& other,
+    int screen_left, int screen_right)
+{
+    int view_width = screen_right - screen_left;
+    int half_height = WINDOW_HEIGHT / 2;
+
+    // Если мёртв — заливаем красным
+    if (player.deathTimer > 0) {
+        HBRUSH deadBrush = CreateSolidBrush(RGB(80, 10, 10));
+        RECT fullR = { screen_left, 0, screen_right, WINDOW_HEIGHT };
+        FillRect(memDC, &fullR, deadBrush);
+        DeleteObject(deadBrush);
+
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 80, 80));
+        const wchar_t* txt = L"ВЫ МЕРТВЫ";
+        TextOut(memDC, screen_left + view_width / 2 - 50, WINDOW_HEIGHT / 2 - 10, txt, (int)wcslen(txt));
+        return;
+    }
+
+    double* zbuffer = new double[view_width];
+
+    HBRUSH ceilingBrush = CreateSolidBrush(RGB(40, 40, 40));
+    HBRUSH floorBrush = CreateSolidBrush(RGB(70, 70, 70));
+
+    RECT rectCeil = { screen_left, 0, screen_right, half_height };
+    RECT rectFloor = { screen_left, half_height, screen_right, WINDOW_HEIGHT };
+
+    FillRect(memDC, &rectCeil, ceilingBrush);
+    FillRect(memDC, &rectFloor, floorBrush);
+
+    DeleteObject(ceilingBrush);
+    DeleteObject(floorBrush);
+
+    for (int x = 0; x < view_width; x++) {
+        double ray_angle = (player.angle - FOV / 2.0)
+            + ((double)x / (double)view_width) * FOV;
+
+        double distance_to_wall = 0.0;
+        bool hit_wall = false;
+
+        double eye_x = sin(ray_angle);
+        double eye_y = cos(ray_angle);
+
+        while (!hit_wall && distance_to_wall < 16.0) {
+            distance_to_wall += 0.05;
+            int test_x = (int)(player.x + eye_x * distance_to_wall);
+            int test_y = (int)(player.y + eye_y * distance_to_wall);
+
+            if (test_x < 0 || test_x >= MAP_WIDTH || test_y < 0 || test_y >= MAP_HEIGHT) {
+                hit_wall = true;
+                distance_to_wall = 16.0;
+            }
+            else if (map[test_y][test_x] == '#') {
+                hit_wall = true;
+            }
+        }
+
+        distance_to_wall *= cos(ray_angle - player.angle);
+        if (distance_to_wall < 0.1) distance_to_wall = 0.1;
+
+        zbuffer[x] = distance_to_wall;
+
+        int wall_height = (int)((double)WINDOW_HEIGHT / distance_to_wall);
+        if (wall_height > WINDOW_HEIGHT) wall_height = WINDOW_HEIGHT;
+
+        int ceiling = half_height - wall_height / 2;
+        int floor = half_height + wall_height / 2;
+
+        int color_val = (int)(200.0 / (1.0 + distance_to_wall * distance_to_wall * 0.1));
+        if (color_val > 255) color_val = 255;
+        if (color_val < 0)   color_val = 0;
+
+        HPEN wallPen = CreatePen(PS_SOLID, 1, RGB(color_val, color_val / 2, color_val / 4));
+        HPEN oldPen = (HPEN)SelectObject(memDC, wallPen);
+
+        MoveToEx(memDC, screen_left + x, ceiling, NULL);
+        LineTo(memDC, screen_left + x, floor);
+
+        SelectObject(memDC, oldPen);
+        DeleteObject(wallPen);
+    }
+
+    RenderOtherPlayer(memDC, player, other, screen_left, view_width, half_height, zbuffer);
+    RenderWeapon(memDC, player, screen_left, screen_right);
+    RenderHUD(memDC, player, screen_left, screen_right);
+
+    delete[] zbuffer;
+}
+
+// ---------- Главная отрисовка ----------
+void DrawGame(HDC hdc) {
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, WINDOW_WIDTH, WINDOW_HEIGHT);
+    SelectObject(memDC, memBitmap);
+
+    RenderPlayerView(memDC, p1, p2, 0, WINDOW_WIDTH / 2);
+    RenderPlayerView(memDC, p2, p1, WINDOW_WIDTH / 2, WINDOW_WIDTH);
+
+    HPEN linePen = CreatePen(PS_SOLID, 4, RGB(0, 0, 0));
+    SelectObject(memDC, linePen);
+    MoveToEx(memDC, WINDOW_WIDTH / 2, 0, NULL);
+    LineTo(memDC, WINDOW_WIDTH / 2, WINDOW_HEIGHT);
+    DeleteObject(linePen);
+
+    SetTextColor(memDC, RGB(255, 255, 255));
+    SetBkMode(memDC, TRANSPARENT);
+    TextOut(memDC, 10, 10, L"Игрок 1: WASD + ПРОБЕЛ", 22);
+    TextOut(memDC, WINDOW_WIDTH / 2 + 10, 10, L"Игрок 2: СТРЕЛКИ + R.CTRL", 25);
+
+    BitBlt(hdc, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, memDC, 0, 0, SRCCOPY);
+
+    DeleteObject(memBitmap);
+    DeleteDC(memDC);
+}
+
+// ---------- Коллизии ----------
+void TryMove(Player& p, double dx, double dy) {
+    if (p.deathTimer > 0) return;
+
+    double new_x = p.x + dx;
+    double new_y = p.y + dy;
+    if (map[(int)p.y][(int)new_x] != '#') p.x = new_x;
+    if (map[(int)new_y][(int)p.x] != '#') p.y = new_y;
+}
+
+// ---------- Респавн ----------
+void RespawnPlayer(Player& p) {
+    p.x = p.startX;
+    p.y = p.startY;
+    p.angle = p.startAngle;
+    p.hp = 100;
+    p.deathTimer = 0;
+    p.shootCooldown = 0;
+    p.muzzleFlash = 0;
+}
+
+// ---------- Игровая логика ----------
+void UpdateGame() {
+    // Кулдауны и таймеры
+    Player* allPlayers[2] = { &p1, &p2 };
+    for (int i = 0; i < 2; i++) {
+        Player* pl = allPlayers[i];
+        if (pl->shootCooldown > 0) pl->shootCooldown--;
+        if (pl->muzzleFlash > 0) pl->muzzleFlash--;
+        if (pl->deathTimer > 0) {
+            pl->deathTimer--;
+            if (pl->deathTimer == 0) RespawnPlayer(*pl);
+        }
+    }
+
+    // --- Игрок 1 ---
+    if (GetAsyncKeyState('W') & 0x8000) TryMove(p1, sin(p1.angle) * move_speed, cos(p1.angle) * move_speed);
+    if (GetAsyncKeyState('S') & 0x8000) TryMove(p1, -sin(p1.angle) * move_speed, -cos(p1.angle) * move_speed);
+    if (GetAsyncKeyState('A') & 0x8000) p1.angle -= rot_speed;
+    if (GetAsyncKeyState('D') & 0x8000) p1.angle += rot_speed;
+    if (GetAsyncKeyState(VK_SPACE) & 0x8000) TryShoot(p1, p2);
+
+    // --- Игрок 2 ---
+    if (GetAsyncKeyState(VK_UP) & 0x8000) TryMove(p2, sin(p2.angle) * move_speed, cos(p2.angle) * move_speed);
+    if (GetAsyncKeyState(VK_DOWN) & 0x8000) TryMove(p2, -sin(p2.angle) * move_speed, -cos(p2.angle) * move_speed);
+    if (GetAsyncKeyState(VK_LEFT) & 0x8000) p2.angle -= rot_speed;
+    if (GetAsyncKeyState(VK_RIGHT) & 0x8000) p2.angle += rot_speed;
+    if (GetAsyncKeyState(VK_RCONTROL) & 0x8000) TryShoot(p2, p1);
+}
+
+// ---------- Окно ----------
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        DrawGame(hdc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
+    _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
+{
+    const wchar_t CLASS_NAME[] = L"RaycastWindowClass";
+    WNDCLASS wc = { };
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClass(&wc);
+
+    RECT wr = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
+
+    HWND hwnd = CreateWindowEx(0, CLASS_NAME, L"WinAPI Doom-Quake Split-Screen",
+        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
+        NULL, NULL, hInstance, NULL);
+
+    if (hwnd == NULL) return 0;
+    ShowWindow(hwnd, nCmdShow);
+
+    MSG msg = { };
+    while (msg.message != WM_QUIT) {
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        else {
+            UpdateGame();
+            InvalidateRect(hwnd, NULL, FALSE);
+            Sleep(16);
+        }
+    }
+    return 0;
+}
