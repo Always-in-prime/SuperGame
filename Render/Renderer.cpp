@@ -1,9 +1,9 @@
 ﻿#include "Renderer.h"
-#include "Map.h"
-#include "Player.h"
+#include "../Game/Map.h"
+#include "../Game/Player.h"
+#include "../Game/Texture.h"
 #include "Framebuffer.h"
 #include "Font.h"
-#include "Texture.h"
 #include "Raycast.h"
 #include "Sprite.h"
 #include "Weapon.h"
@@ -12,12 +12,15 @@
 #include <math.h>
 #include <stdlib.h>
 
-// =====================================================================
+// ---------------------------------------------------------------------
 //  Вид одного игрока
-// =====================================================================
-void RenderPlayerView(Player& player, Player& other,
+// ---------------------------------------------------------------------
+void RenderPlayerView(World& w, int viewerIdx,
     int screen_left, int screen_right)
 {
+    Player& player = w.players[viewerIdx];
+    Player& other = w.players[1 - viewerIdx];
+
     const int view_width = screen_right - screen_left;
     const int fixed_half = WINDOW_HEIGHT / 2;
 
@@ -36,7 +39,7 @@ void RenderPlayerView(Player& player, Player& other,
     double camA = player.renderAngle;
     int    half_height = fixed_half;
 
-    if (player.shakeMag > 0.01f) {
+    if (w.settings.screenShake && player.shakeMag > 0.01f) {
         double s = player.shakeMag;
         camX += ((rand() % 201) - 100) / 100.0 * s * 0.015;
         camY += ((rand() % 201) - 100) / 100.0 * s * 0.015;
@@ -82,14 +85,21 @@ void RenderPlayerView(Player& player, Player& other,
         if (perp < 0.02) perp = 0.02;
         zbuffer[x] = perp;
 
-        int rawHeight = (int)((double)WINDOW_HEIGHT / perp);
-        if (rawHeight < 1) rawHeight = 1;
+        // Проекция: 1 мировая единица = WINDOW_HEIGHT / perp пикселей.
+        double pixPerUnit = (double)WINDOW_HEIGHT / perp;
 
-        int wall_height = rawHeight;
-        if (wall_height > WINDOW_HEIGHT * 32) wall_height = WINDOW_HEIGHT * 32;
+        // Потолок на WALL_HEIGHT, пол на 0, глаза на EYE_HEIGHT.
+        // Пиксели выше горизонта:   (WALL_HEIGHT - EYE_HEIGHT) * pixPerUnit
+        // Пиксели ниже горизонта:   EYE_HEIGHT * pixPerUnit
+        int pixAbove = (int)((WALL_HEIGHT - EYE_HEIGHT) * pixPerUnit);
+        int pixBelow = (int)(EYE_HEIGHT * pixPerUnit);
 
-        int ceiling = half_height - wall_height / 2;
-        int floor_ = half_height + wall_height / 2;
+        int ceiling = half_height - pixAbove;
+        int floor_ = half_height + pixBelow;
+
+        // Отсекаем «бесконечно далёкое», чтобы не сломать int.
+        if (ceiling < -WINDOW_HEIGHT * 32) ceiling = -WINDOW_HEIGHT * 32;
+        if (floor_ > WINDOW_HEIGHT * 32) floor_ = WINDOW_HEIGHT * 32;
 
         double fog = 1.0 / (1.0 + perp * perp * 0.09);
         if (hit.side == 1) fog *= 0.72;
@@ -99,6 +109,8 @@ void RenderPlayerView(Player& player, Player& other,
         if (texX < 0) texX = 0;
         if (texX >= TEX_SIZE) texX = TEX_SIZE - 1;
 
+        int rawHeight = (int)pixPerUnit;   // == WINDOW_HEIGHT / perp
+        if (rawHeight < 1) rawHeight = 1;
         double texStep = (double)TEX_SIZE / (double)rawHeight;
         double texStart = 0.0;
 
@@ -119,14 +131,14 @@ void RenderPlayerView(Player& player, Player& other,
     delete[] zbuffer;
 }
 
-// =====================================================================
+// ---------------------------------------------------------------------
 //  Главная отрисовка
-// =====================================================================
-void DrawGame(HDC hdc) {
+// ---------------------------------------------------------------------
+void DrawGame(HDC hdc, World& w) {
     FB_Init();
 
-    RenderPlayerView(p1, p2, 0, WINDOW_WIDTH / 2);
-    RenderPlayerView(p2, p1, WINDOW_WIDTH / 2, WINDOW_WIDTH);
+    RenderPlayerView(w, 0, 0, WINDOW_WIDTH / 2);
+    RenderPlayerView(w, 1, WINDOW_WIDTH / 2, WINDOW_WIDTH);
 
     // Разделительная линия
     for (int y = 0; y < WINDOW_HEIGHT; ++y) {
@@ -135,21 +147,21 @@ void DrawGame(HDC hdc) {
     }
 
     // Оружие + HUD
-    RenderWeapon(p1, WINDOW_WIDTH / 2);
-    RenderWeapon(p2, WINDOW_WIDTH);
-    RenderHUD(p1, 0);
-    RenderHUD(p2, WINDOW_WIDTH / 2);
+    RenderWeapon(w.players[0], WINDOW_WIDTH / 2);
+    RenderWeapon(w.players[1], WINDOW_WIDTH);
+    RenderHUD(w.players[0], 0);
+    RenderHUD(w.players[1], WINDOW_WIDTH / 2);
 
     // Feedback overlay
-    RenderPlayerOverlay(p1, 0, WINDOW_WIDTH / 2);
-    RenderPlayerOverlay(p2, WINDOW_WIDTH / 2, WINDOW_WIDTH);
+    RenderPlayerOverlay(w.players[0], 0, WINDOW_WIDTH / 2);
+    RenderPlayerOverlay(w.players[1], WINDOW_WIDTH / 2, WINDOW_WIDTH);
 
     // Управление
     DrawText(10, 10, "P1: WASD + SPACE", RGB(230, 230, 230), 1);
-    DrawText(WINDOW_WIDTH / 2 + 10, 10, "P2: ARROWS + R.CTRL", RGB(230, 230, 230), 1);
+    DrawText(WINDOW_WIDTH / 2 + 10, 10, "P2: ARROWS + R.Ctrl", RGB(230, 230, 230), 1);
 
     // ---- Оверлей конца раунда ----
-    if (g_roundEnding) {
+    if (w.match.roundEnding) {
         const int bandH = 60;
         int bandY = WINDOW_HEIGHT / 2 - bandH / 2;
         FillRect(0, bandY, WINDOW_WIDTH, bandH, RGB(10, 10, 14));
@@ -160,14 +172,14 @@ void DrawGame(HDC hdc) {
         int tw = TextWidth(title, 2);
         DrawText((WINDOW_WIDTH - tw) / 2, bandY + 8, title, RGB(255, 220, 70), 2);
 
-        const char* winner = (g_lastWinner == 0) ? "PLAYER 1 WINS" :
-            (g_lastWinner == 1) ? "PLAYER 2 WINS" :
+        const char* winner = (w.match.lastWinner == 0) ? "PLAYER 1 WINS" :
+            (w.match.lastWinner == 1) ? "PLAYER 2 WINS" :
             "DRAW";
         int ww = TextWidth(winner, 1);
         DrawText((WINDOW_WIDTH - ww) / 2, bandY + 30, winner, RGB(230, 230, 230), 1);
 
         char buf[48];
-        wsprintfA(buf, "NEXT ARENA IN %d...", (int)(g_roundEndTimer + 0.99f));
+        wsprintfA(buf, "NEXT ARENA IN %d...", (int)(w.match.roundEndTimer + 0.99f));
         int bw = TextWidth(buf, 1);
         DrawText((WINDOW_WIDTH - bw) / 2, bandY + 44, buf, RGB(180, 180, 180), 1);
     }

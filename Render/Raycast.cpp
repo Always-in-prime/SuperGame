@@ -1,6 +1,6 @@
 #include "Raycast.h"
-#include "Map.h"
-#include "Texture.h"
+#include "../Game/Map.h"
+#include "../Game/Texture.h"
 #include <math.h>
 
 RayHit CastRay(double px, double py, double dirX, double dirY) {

@@ -1,5 +1,5 @@
 #pragma once
-#include "Common.h"
+#include "../Core/Common.h"
 #include <cstdint>
 
 #define TEX_SIZE 64

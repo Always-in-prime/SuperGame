@@ -27,14 +27,28 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="App\Application.h" />
     <ClInclude Include="Core\Common.h" />
     <ClInclude Include="Core\Config.h" />
+    <ClInclude Include="Core\Input.h" />
+    <ClInclude Include="Core\MathUtils.h" />
+    <ClInclude Include="Core\Mesh.h" />
+    <ClInclude Include="Core\MeshRender.h" />
+    <ClInclude Include="Core\Primitive.h" />
+    <ClInclude Include="Core\Raycast3D.h" />
+    <ClInclude Include="Core\Settings.h" />
+    <ClInclude Include="Core\TextureBank.h" />
     <ClInclude Include="Game\CharacterModel.h" />
+    <ClInclude Include="Game\Combat.h" />
     <ClInclude Include="Game\Hitbox.h" />
     <ClInclude Include="Game\Map.h" />
+    <ClInclude Include="Game\Match.h" />
     <ClInclude Include="Game\Player.h" />
+    <ClInclude Include="Game\PlayerInput.h" />
+    <ClInclude Include="Game\Spawner.h" />
     <ClInclude Include="Game\Texture.h" />
-    <ClInclude Include="Render\BodyTextures.h" />
+    <ClInclude Include="Game\WeaponModel.h" />
+    <ClInclude Include="Game\World.h" />
     <ClInclude Include="Render\Font.h" />
     <ClInclude Include="Render\Framebuffer.h" />
     <ClInclude Include="Render\Hud.h" />
@@ -49,15 +63,23 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="App\Application.cpp" />
+    <ClCompile Include="App\Main.cpp" />
+    <ClCompile Include="Core\Input.cpp" />
+    <ClCompile Include="Core\MeshRender.cpp" />
+    <ClCompile Include="Core\Raycast3D.cpp" />
+    <ClCompile Include="Core\Settings.cpp" />
+    <ClCompile Include="Core\TextureBank.cpp" />
     <ClCompile Include="Game\CharacterModel.cpp" />
+    <ClCompile Include="Game\Combat.cpp" />
     <ClCompile Include="Game\Hitbox.cpp" />
     <ClCompile Include="Game\Map.cpp" />
+    <ClCompile Include="Game\Match.cpp" />
     <ClCompile Include="Game\Player.cpp" />
+    <ClCompile Include="Game\Spawner.cpp" />
     <ClCompile Include="Game\Texture.cpp" />
-    <ClCompile Include="Main.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Test|x64'">true</ExcludedFromBuild>
-    </ClCompile>
-    <ClCompile Include="Render\BodyTextures.cpp" />
+    <ClCompile Include="Game\WeaponModel.cpp" />
+    <ClCompile Include="Game\World.cpp" />
     <ClCompile Include="Render\Font.cpp" />
     <ClCompile Include="Render\Framebuffer.cpp" />
     <ClCompile Include="Render\Hud.cpp" />

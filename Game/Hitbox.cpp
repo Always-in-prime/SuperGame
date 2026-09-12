@@ -1,109 +1,61 @@
 #include "Hitbox.h"
-#include <math.h>
-
-// ---------------------------------------------------------------------
-//  ѕересечение луча с вертикальным цилиндром, ось Z.
-//  ¬озвращает t ближайшего положительного пересечени€ боковой
-//  поверхности в диапазоне [zMin, zMax], либо -1 если мимо.
-// ---------------------------------------------------------------------
-static double RayCylXZ(double ox, double oy,
-    double dx, double dy,
-    double px, double py, double r,
-    double zMin, double zMax,
-    double maxT)
-{
-    double lx = ox - px;   // <-- исправлен знак
-    double ly = oy - py;   // <-- исправлен знак
-
-    double A = dx * dx + dy * dy;
-    if (A < 1e-9) return -1.0;
-
-    double B = 2.0 * (dx * lx + dy * ly);
-    double Cc = lx * lx + ly * ly - r * r;
-    double disc = B * B - 4.0 * A * Cc;
-    if (disc < 0.0) return -1.0;
-
-    double sq = sqrt(disc);
-    double t0 = (-B - sq) / (2.0 * A);
-    double t1 = (-B + sq) / (2.0 * A);
-
-    if (t1 < 0.0) return -1.0;
-
-    double t = (t0 > 0.0) ? t0 : t1;
-    if (maxT > 0.0 && t > maxT) return -1.0;
-
-    (void)zMin; (void)zMax;
-    return t;
-}
-
-static double RaySphereXZ(double ox, double oy,
-    double dx, double dy,
-    double px, double py, double r,
-    double maxT)
-{
-    double lx = ox - px;   // <-- исправлен знак
-    double ly = oy - py;   // <-- исправлен знак
-
-    double A = dx * dx + dy * dy;
-    if (A < 1e-9) return -1.0;
-
-    double B = 2.0 * (dx * lx + dy * ly);
-    double Cc = lx * lx + ly * ly - r * r;
-    double disc = B * B - 4.0 * A * Cc;
-    if (disc < 0.0) return -1.0;
-
-    double sq = sqrt(disc);
-    double t0 = (-B - sq) / (2.0 * A);
-    double t1 = (-B + sq) / (2.0 * A);
-
-    if (t1 < 0.0) return -1.0;
-
-    double t = (t0 > 0.0) ? t0 : t1;
-    if (maxT > 0.0 && t > maxT) return -1.0;
-    return t;
-}
+#include "../Core/Raycast3D.h"
+#include <cmath>
 
 // =====================================================================
-HitInfo RaycastCharacter(double ox, double oy,
-    double dx, double dy,
-    double px, double py, double a,
-    double maxT)
+//  RaycastCharacterMesh
+//
+//  Ћуч пускаетс€ в мировой системе (X, Z). ¬ысоты три:
+//  ноги, торс, голова. ѕоскольку луч плоский (нет pitch),
+//  одного луча недостаточно Ч нужны лучи на разных высотах,
+//  иначе попадЄм только в торс.
+//
+//  ‘ормат передачи в RaycastMesh:
+//    ox     Ч мировой X
+//    rayY   Ч высота (Y в 3D-системе)
+//    oy     Ч мировой Y (Z в 3D-системе)
+//    dx,0,dy Ч направление луча (dy = 0 Ч плоский shot)
+// =====================================================================
+HitInfo RaycastCharacterMesh(const Mesh& mesh,
+    double ox, double oy,
+    double dx, double dy)
 {
-    HitInfo best = { false, 0.0, -1 };
+    HitInfo out = { false, 0.0, -1, 1.0 };
 
-    double ca = cos(a);
-    double sa = sin(a);
+    // ѕровер€ем три высоты: ноги (0.2), торс (0.5), голова (0.85).
+    double eyeHeights[] = { 0.5, 0.85, 0.2 };
+    const int nRays = 3;
 
-    // ћировые оси повЄрнутой модели цели:
-    //   right   = ( cos(a), -sin(a) )
-    //   forward = ( sin(a),  cos(a) )
-    //
-    // Ћокальные (cx, cy) переводим в мировые:
-    //   wx = px + cx*cos(a) + cy*sin(a)
-    //   wy = py - cx*sin(a) + cy*cos(a)
+    double bestT = 1e30;
+    int    bestIdx = -1;
+    double bestDmg = 1.0;
 
-    for (int i = 0; i < PLAYER_PART_COUNT; ++i) {
-        const BodyPart& b = PLAYER_PARTS[i];
+    for (int r = 0; r < nRays; ++r) {
+        double rayY = eyeHeights[r];
 
-        double wpx = px + b.cx * ca + b.cy * sa;
-        double wpy = py - b.cx * sa + b.cy * ca;
+        PrimHit ph = RaycastMesh(mesh,
+            ox, rayY, oy,          // X, высота, мировой Y(=Z)
+            dx, 0.0, dy);          // направление в X, 0, Z
+        if (!ph.hit) continue;
 
-        double t = -1.0;
-        if (b.kind == PART_SPHERE) {
-            t = RaySphereXZ(ox, oy, dx, dy, wpx, wpy, b.r, maxT);
-        }
-        else {
-            t = RayCylXZ(ox, oy, dx, dy, wpx, wpy, b.r,
-                b.zMin, b.zMax, maxT);
-        }
+        // Ќормируем длину луча, потому что dx, dy не об€зательно единичны
+        // (в Combat.cpp они sin/cos, но пусть будет надЄжно).
+        double len = sqrt(dx * dx + dy * dy);
+        if (len < 1e-9) continue;
+        double distXZ = ph.t / len;
 
-        if (t < 0.0) continue;
-        if (!best.hit || t < best.distance) {
-            best.hit = true;
-            best.distance = t;
-            best.partIdx = i;
-        }
+        if (distXZ >= bestT) continue;
+
+        bestT = distXZ;
+        bestIdx = ph.primIdx;
+        bestDmg = mesh.parts[ph.primIdx].damageMult;
     }
 
-    return best;
+    if (bestIdx < 0) return out;
+
+    out.hit = true;
+    out.distance = bestT;
+    out.partIdx = bestIdx;
+    out.damageMult = bestDmg;
+    return out;
 }

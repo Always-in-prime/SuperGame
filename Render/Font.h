@@ -1,5 +1,5 @@
 #pragma once
-#include "Common.h"
+#include "../Core/Common.h"
 #include <cstdint>
 
 void DrawChar(int x, int y, char c, uint32_t color, int scale = 1);

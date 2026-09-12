@@ -1,5 +1,5 @@
 #pragma once
-#include "Common.h"
+#include "../Core/Common.h"
 
 extern char map[MAP_HEIGHT][MAP_WIDTH + 1];
 

@@ -1,7 +1,7 @@
 #pragma once
-#include "Common.h"
-#include "Player.h"
+#include "../Core/Common.h"
+#include "../Game/World.h"
 
-void DrawGame(HDC hdc);
-void RenderPlayerView(Player& player, Player& other,
+void DrawGame(HDC hdc, World& w);
+void RenderPlayerView(World& w, int viewerIdx,
     int screen_left, int screen_right);
