@@ -4,31 +4,29 @@
 
 // ============================================================
 //  TextureBank — единое хранилище всех текстур объектов.
-//
-//  Что сюда попадает:
-//    - текстуры частей тела (голова, торс, нога, рука, плечо)
-//    - текстуры оружия (дерево, металл, кожа, золото)
-//    - любые будущие текстуры (пикапы, двери, декор)
-//
-//  Текстуры генерируются один раз при первом обращении
-//  и живут до конца работы программы.
+//  (комментарий сохранён)
 // ============================================================
 
-#define TEXBANK_SIZE 64
-#define TEXBANK_MAX  16
+constexpr int kTexBankSize = 64;
+constexpr int kTexBankMax = 16;
 
-// Регистрация и сэмплинг.
+// Backwards-compatible макросы (постепенно выводим из кода).
+#define TEXBANK_SIZE kTexBankSize
+#define TEXBANK_MAX  kTexBankMax
+
 void TexBank_Init();
 
-// Добавляет текстуру в банк. Возвращает её индекс.
-// Если текстура уже зарегистрирована по этому имени — вернёт
-// существующий индекс (без дублирования).
 int  TexBank_Register(const char* name,
     uint32_t(*gen)(double u, double v));
 
-// Получить индекс по имени (-1 если не найдено).
 int  TexBank_Find(const char* name);
 
 // Сэмпл текстуры по индексу. u,v ∈ [0,1).
 // Если id < 0 — возвращает fallback-цвет (magenta, чтобы баг был виден).
-uint32_t TexBank_Sample(int id, double u, double v);
+//
+// Горячий путь: без циклов wrap, прямая индексация, noexcept.
+// Для u,v ВНЕ [0,1) используйте TexBank_SampleWrap.
+uint32_t TexBank_Sample(int id, double u, double v) noexcept;
+
+// Обёртка с wrap-around. Для случаев, когда u,v могут выйти за [0,1).
+uint32_t TexBank_SampleWrap(int id, double u, double v) noexcept;

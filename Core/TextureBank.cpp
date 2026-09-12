@@ -1,36 +1,44 @@
-#include "TextureBank.h"
+п»ї#include "TextureBank.h"
 #include <cstring>
 #include <cmath>
 
-// ---------------------------------------------------------------------
-//  Хранилище
-// ---------------------------------------------------------------------
-struct TexEntry {
-    char     name[32];
-    uint32_t pixels[TEXBANK_SIZE][TEXBANK_SIZE];
-    bool     used;
-};
+namespace {
 
-static TexEntry s_bank[TEXBANK_MAX];
-static bool     s_ready = false;
+    struct TexEntry {
+        char     name[32];
+        uint32_t pixels[kTexBankSize][kTexBankSize];
+        bool     used;
+    };
 
-// ---------------------------------------------------------------------
-static void GenEmpty(TexEntry& e) {
-    // Шахматная заглушка, если генератор вдруг вернул пустоту.
-    for (int y = 0; y < TEXBANK_SIZE; ++y) {
-        for (int x = 0; x < TEXBANK_SIZE; ++x) {
-            bool odd = ((x >> 3) ^ (y >> 3)) & 1;
-            e.pixels[y][x] = odd ? RGB(255, 0, 255) : RGB(30, 30, 30);
+    TexEntry s_bank[kTexBankMax];
+    bool     s_ready = false;
+
+    // РЁР°С…РјР°С‚РЅР°СЏ Р·Р°РіР»СѓС€РєР° вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ, РїРѕРєР° С‚РµРєСЃС‚СѓСЂР° РЅРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅР°.
+    void GenEmpty(TexEntry& e) noexcept {
+        for (int y = 0; y < kTexBankSize; ++y) {
+            for (int x = 0; x < kTexBankSize; ++x) {
+                const bool odd = ((x >> 3) ^ (y >> 3)) & 1;
+                e.pixels[y][x] = odd ? RGB(255, 0, 255) : RGB(30, 30, 30);
+            }
         }
     }
-}
+
+    // Р‘С‹СЃС‚СЂС‹Р№ wrap Р±РµР· С†РёРєР»РѕРІ. Р Р°Р±РѕС‚Р°РµС‚ РєРѕСЂСЂРµРєС‚РЅРѕ РґР»СЏ Р»СЋР±РѕРіРѕ u,v,
+    // РІРєР»СЋС‡Р°СЏ РѕС‚СЂРёС†Р°С‚РµР»СЊРЅС‹Рµ.
+    inline double Wrap01(double t) noexcept {
+        t -= std::floor(t);      // t в€€ [0,1)
+        // floor(-0.1) = -1, -0.1 - (-1) = 0.9 вЂ” РєРѕСЂСЂРµРєС‚РЅРѕ.
+        return t;
+    }
+
+}  // namespace
 
 // ---------------------------------------------------------------------
 void TexBank_Init() {
     if (s_ready) return;
     s_ready = true;
 
-    for (int i = 0; i < TEXBANK_MAX; ++i) {
+    for (int i = 0; i < kTexBankMax; ++i) {
         s_bank[i].used = false;
         s_bank[i].name[0] = '\0';
         GenEmpty(s_bank[i]);
@@ -40,8 +48,8 @@ void TexBank_Init() {
 // ---------------------------------------------------------------------
 int TexBank_Find(const char* name) {
     if (!name) return -1;
-    for (int i = 0; i < TEXBANK_MAX; ++i) {
-        if (s_bank[i].used && strcmp(s_bank[i].name, name) == 0)
+    for (int i = 0; i < kTexBankMax; ++i) {
+        if (s_bank[i].used && std::strcmp(s_bank[i].name, name) == 0)
             return i;
     }
     return -1;
@@ -53,52 +61,56 @@ int TexBank_Register(const char* name,
 {
     TexBank_Init();
 
-    // Уже зарегистрирована?
-    int existing = TexBank_Find(name);
+    const int existing = TexBank_Find(name);
     if (existing >= 0) return existing;
 
-    // Ищем свободный слот.
     int slot = -1;
-    for (int i = 0; i < TEXBANK_MAX; ++i) {
+    for (int i = 0; i < kTexBankMax; ++i) {
         if (!s_bank[i].used) { slot = i; break; }
     }
-    if (slot < 0) return -1;   // банк переполнен
+    if (slot < 0) return -1;   // Р±Р°РЅРє РїРµСЂРµРїРѕР»РЅРµРЅ
 
-    // Заполняем.
     TexEntry& e = s_bank[slot];
     strncpy_s(e.name, sizeof(e.name), name, _TRUNCATE);
     e.used = true;
 
     if (gen) {
-        for (int y = 0; y < TEXBANK_SIZE; ++y) {
-            for (int x = 0; x < TEXBANK_SIZE; ++x) {
-                double u = (double)x / TEXBANK_SIZE;
-                double v = (double)y / TEXBANK_SIZE;
-                e.pixels[y][x] = gen(u, v);
+        constexpr double kInv = 1.0 / kTexBankSize;
+        for (int y = 0; y < kTexBankSize; ++y) {
+            for (int x = 0; x < kTexBankSize; ++x) {
+                e.pixels[y][x] = gen(x * kInv, y * kInv);
             }
         }
     }
-    // иначе остаётся шахматная заглушка.
 
     return slot;
 }
 
 // ---------------------------------------------------------------------
-uint32_t TexBank_Sample(int id, double u, double v) {
-    if (id < 0 || id >= TEXBANK_MAX || !s_bank[id].used) {
-        return RGB(255, 0, 255);   // магента — «нет текстуры»
+uint32_t TexBank_Sample(int id, double u, double v) noexcept {
+    // Fallback: РЅРµРІР°Р»РёРґРЅС‹Р№ id РёР»Рё РЅРµР·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅР°СЏ С‚РµРєСЃС‚СѓСЂР°.
+    // Р•РґРёРЅС‹Р№ РІРѕР·РІСЂР°С‚ Р±РµР· РІРµС‚РІР»РµРЅРёР№ РїРѕ С„Р»Р°РіР°Рј.
+    if (static_cast<unsigned>(id) >= static_cast<unsigned>(kTexBankMax) ||
+        !s_bank[id].used)
+    {
+        return RGB(255, 0, 255);
     }
 
-    // Нормализация u,v — оборачивание (tile).
-    while (u < 0.0) u += 1.0;
-    while (u >= 1.0) u -= 1.0;
-    while (v < 0.0) v += 1.0;
-    while (v >= 1.0) v -= 1.0;
-
-    int x = (int)(u * TEXBANK_SIZE);
-    int y = (int)(v * TEXBANK_SIZE);
-    if (x < 0) x = 0; if (x >= TEXBANK_SIZE) x = TEXBANK_SIZE - 1;
-    if (y < 0) y = 0; if (y >= TEXBANK_SIZE) y = TEXBANK_SIZE - 1;
+    // Р“РѕСЂСЏС‡РёР№ РїСѓС‚СЊ: u,v в€€ [0,1). РќРёРєР°РєРёС… while/fmod.
+    // Р•СЃР»Рё СЌС‚Рѕ РЅРµ С‚Р°Рє вЂ” СѓРїР°РґС‘Рј РЅР° clamp РЅРёР¶Рµ (Р±РµР·РѕРїР°СЃРЅРѕ).
+    int x = static_cast<int>(u * kTexBankSize);
+    int y = static_cast<int>(v * kTexBankSize);
+    if (static_cast<unsigned>(x) >= static_cast<unsigned>(kTexBankSize)) {
+        x = (x < 0) ? 0 : (kTexBankSize - 1);
+    }
+    if (static_cast<unsigned>(y) >= static_cast<unsigned>(kTexBankSize)) {
+        y = (y < 0) ? 0 : (kTexBankSize - 1);
+    }
 
     return s_bank[id].pixels[y][x];
+}
+
+// ---------------------------------------------------------------------
+uint32_t TexBank_SampleWrap(int id, double u, double v) noexcept {
+    return TexBank_Sample(id, Wrap01(u), Wrap01(v));
 }
